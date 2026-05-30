@@ -745,14 +745,15 @@ class SignalProcessor(threading.Thread):
                         self.data_ready = False
 
                     # -----> SPECTRUM PROCESSING <-----
-                    if self.en_spectrum and self.data_ready:
+                    spectrum_plot_data = None
+                    if self.data_ready and (self.en_spectrum or self.en_waterfall_log):
                         spectrum_plot_data = reduce_spectrum(
                             self.spectrum, self.spectrum_plot_size, self.channel_number
                         )
+                    if self.en_spectrum and spectrum_plot_data is not None:
                         que_data_packet.append(["spectrum", spectrum_plot_data])
-
-                        if self.en_waterfall_log:
-                            self._write_waterfall_row(spectrum_plot_data)
+                    if self.en_waterfall_log and spectrum_plot_data is not None:
+                        self._write_waterfall_row(spectrum_plot_data)
 
                     daq_cpi = int(
                         self.module_receiver.iq_header.cpi_length * 1000 / self.module_receiver.iq_header.sampling_freq
