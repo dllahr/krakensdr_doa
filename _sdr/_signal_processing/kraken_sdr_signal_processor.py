@@ -224,12 +224,22 @@ class SignalProcessor(threading.Thread):
         self.fm_demod_channel_list = []
 
         # TODO: NEED to have a funtion to update the file name if changed in the web ui
-        self.data_recording_file_name = "mydata.csv"
+        self.data_recording_file_name = "logs/kraken_log.csv" #dllahr changed from "mydata.csv"
         data_recording_file_path = os.path.join(os.path.join(self.root_path, self.data_recording_file_name))
         self.data_record_fd = open(data_recording_file_path, "a+")
-        self.en_data_record = False
+        self.en_data_record = True #dllahr changed from False to True
         self.write_interval = 1
         self.last_write_time = [time.time()] * self.max_vfos
+
+        self.en_waterfall_log = False
+        waterfall_log_dir = os.path.join(self.root_path, "logs")
+        os.makedirs(waterfall_log_dir, exist_ok=True)
+        self.waterfall_log_path = os.path.join(waterfall_log_dir, "kraken_waterfall.csv")
+        self.waterfall_log_fd = None
+        self._wf_accum = None
+        self._wf_accum_count = 0
+        self._wf_accum_start = None
+        self._wf_freq_axis = None
 
         self.adc_overdrive = False
         self.number_of_correlated_sources = []
@@ -741,6 +751,9 @@ class SignalProcessor(threading.Thread):
                         )
                         que_data_packet.append(["spectrum", spectrum_plot_data])
 
+                        if self.en_waterfall_log:
+                            self._write_waterfall_row(spectrum_plot_data)
+
                     daq_cpi = int(
                         self.module_receiver.iq_header.cpi_length * 1000 / self.module_receiver.iq_header.sampling_freq
                     )
@@ -1227,6 +1240,48 @@ class SignalProcessor(threading.Thread):
             os.path.getsize(os.path.join(os.path.join(self.root_path, self.data_recording_file_name))) / 1048576,
             2,
         )  # Convert to MB
+
+    def _reset_waterfall_accum(self):
+        self._wf_accum = None
+        self._wf_accum_count = 0
+        self._wf_accum_start = None
+        self._wf_freq_axis = None
+
+    def _write_waterfall_row(self, spectrum_plot_data):
+        now = time.time()
+
+        if self._wf_accum is None:
+            self._wf_accum = spectrum_plot_data[1, :].copy().astype(np.float64)
+            self._wf_accum_count = 1
+            self._wf_accum_start = now
+            self._wf_freq_axis = spectrum_plot_data[0, :].copy()
+            return
+
+        self._wf_accum += spectrum_plot_data[1, :]
+        self._wf_accum_count += 1
+
+        if now - self._wf_accum_start < 1.0:
+            return
+
+        avg = self._wf_accum / self._wf_accum_count
+
+        if self.waterfall_log_fd is None:
+            file_is_new = not os.path.exists(self.waterfall_log_path) or os.path.getsize(self.waterfall_log_path) == 0
+            self.waterfall_log_fd = open(self.waterfall_log_path, "a")
+            if file_is_new:
+                freq_header = ",".join(f"{f:.1f}" for f in self._wf_freq_axis)
+                self.waterfall_log_fd.write(f"timestamp,{freq_header}\n")
+                self.waterfall_log_fd.flush()
+
+        timestamp = datetime.utcnow().isoformat()
+        row = ",".join(f"{v:.2f}" for v in avg)
+        self.waterfall_log_fd.write(f"{timestamp},{row}\n")
+        self.waterfall_log_fd.flush()
+
+        # Advance start time by exactly 1 s to prevent drift accumulation
+        self._wf_accum = None
+        self._wf_accum_count = 0
+        self._wf_accum_start = self._wf_accum_start + 1.0
 
 
 def calculate_end_lat_lng(s_lat: float, s_lng: float, doa: float, my_bearing: float) -> Tuple[float, float]:

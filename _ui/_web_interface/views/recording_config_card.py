@@ -10,6 +10,7 @@ from variables import option
 
 def get_recording_config_card_layout():
     en_data_record = [1] if web_interface.module_signal_processor.en_data_record else []
+    en_waterfall_log = [1] if web_interface.module_signal_processor.en_waterfall_log else []
     return html.Div(
         [
             html.H2("Local Data Recording", id="data_recording_title"),
@@ -60,6 +61,13 @@ def get_recording_config_card_layout():
                 [
                     html.Div("Enable Local Data Recording:", id="label_en_data_record", className="field-label"),
                     dcc.Checklist(options=option, id="en_data_record", className="field-body", value=en_data_record),
+                ],
+                className="field",
+            ),
+            html.Div(
+                [
+                    html.Div("Enable Waterfall Logging:", id="label_en_waterfall_log", className="field-label"),
+                    dcc.Checklist(options=option, id="en_waterfall_log", className="field-body", value=en_waterfall_log),
                 ],
                 className="field",
             ),

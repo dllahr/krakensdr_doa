@@ -383,7 +383,7 @@ class WebInterface:
         data["expected_num_of_sources"] = 1
 
         # Open System Control
-        data["en_system_control"] = False
+        data["en_system_control"] = True #False
         data["en_beta_features"] = False
 
         # Web Interface

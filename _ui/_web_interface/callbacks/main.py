@@ -76,6 +76,15 @@ def update_data_recording_params(filename, en_data_record, write_interval):
         web_interface.module_signal_processor.write_interval = float(write_interval)
 
 
+@app.callback_shared(None, [Input(component_id="en_waterfall_log", component_property="value")])
+def update_waterfall_log(en_waterfall_log):
+    if en_waterfall_log is not None and len(en_waterfall_log):
+        web_interface.module_signal_processor.en_waterfall_log = True
+    else:
+        web_interface.module_signal_processor.en_waterfall_log = False
+        web_interface.module_signal_processor._reset_waterfall_accum()
+
+
 @app.callback_shared(Output("download_recorded_file", "data"), [Input("btn_download_file", "n_clicks")])
 def send_recorded_file(n_clicks):
     return dcc.send_file(
