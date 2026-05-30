@@ -100,6 +100,18 @@ def get_vfo_card_layout():
                 ),
                 html.Div(
                     [
+                        html.Div("VFO-" + str(i) + " Record Coherent IQ:", className="field-label"),
+                        dcc.Checklist(
+                            id=f"vfo_{i}_record_iq",
+                            options=[{"label": " Record (all channels)", "value": "record"}],
+                            value=[],
+                            className="field-body",
+                        ),
+                    ],
+                    className="field",
+                ),
+                html.Div(
+                    [
                         html.Div(
                             [
                                 html.Div("VFO-" + str(i) + " Demod:", className="field-label"),
