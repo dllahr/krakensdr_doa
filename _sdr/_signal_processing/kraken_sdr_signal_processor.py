@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import queue
 
 # Import built-in modules
 import threading
@@ -104,6 +105,15 @@ class SignalProcessor(threading.Thread):
         self.wav_record_path = f"{shared_path}/records/fm"
         self.en_iq_files = False
         self.iq_record_path = f"{shared_path}/records/iq"
+
+        # Coherent IQ recording (all antenna channels, squelch-gated)
+        self.vfo_record_iq = [False] * 16  # per-VFO enable; max_vfos not yet set
+        self.coherent_record_path = f"{shared_path}/records/iq_coherent"
+        self._iq_write_queue = queue.Queue(maxsize=200)
+        self._record_chunk_bytes = [0] * 16
+        self._record_chunk_size_bytes = 100 * 1024 * 1024  # 100 MB per rolling chunk
+        Path(self.coherent_record_path).mkdir(parents=True, exist_ok=True)
+
         self.en_DOA_estimation = True
         self.doa_measure = "Linear"
         self.compass_offset = 0.0
@@ -254,6 +264,87 @@ class SignalProcessor(threading.Thread):
                 vfo_iq[i] = True if demod == "True" else False
         return vfo_iq
 
+    # ------------------------------------------------------------------
+    # Coherent IQ recording helpers
+    # ------------------------------------------------------------------
+
+    def _make_chunk_path(self, vfo_idx):
+        now_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        freq_mhz = self.vfo_freq[vfo_idx] / 1e6
+        return f"{self.coherent_record_path}/{now_str}_VFO{vfo_idx}_{freq_mhz:.3f}MHz.iq"
+
+    def _make_chunk_meta(self, vfo_idx, sample_rate_hz):
+        return {
+            "vfo_index": vfo_idx,
+            "center_freq_hz": float(self.vfo_freq[vfo_idx]),
+            "n_channels": int(self.channel_number),
+            "sample_rate_hz": int(sample_rate_hz),
+            "start_utc": datetime.utcnow().isoformat() + "Z",
+            "dtype": "complex64",
+            "layout": "channels_x_samples",
+            "chunk_size_bytes": self._record_chunk_size_bytes,
+        }
+
+    def start_vfo_iq_record(self, vfo_idx):
+        """Enable coherent IQ recording for vfo_idx. File opens on the next above-squelch frame."""
+        Path(self.coherent_record_path).mkdir(parents=True, exist_ok=True)
+        self._record_chunk_bytes[vfo_idx] = 0  # triggers new chunk on next frame
+        self.vfo_record_iq[vfo_idx] = True
+
+    def stop_vfo_iq_record(self, vfo_idx):
+        """Disable coherent IQ recording for vfo_idx and flush/close the current chunk."""
+        self.vfo_record_iq[vfo_idx] = False
+        try:
+            self._iq_write_queue.put(("stop", vfo_idx), timeout=1.0)
+        except queue.Full:
+            self.logger.error("IQ write queue full, cannot cleanly stop recording for VFO %d", vfo_idx)
+
+    def _iq_writer_loop(self):
+        """Background daemon thread: drains _iq_write_queue and writes IQ chunks to disk."""
+        file_handles = {}  # vfo_idx -> open binary file handle
+        while True:
+            try:
+                item = self._iq_write_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            try:
+                if item is None:  # global stop sentinel
+                    for fh in file_handles.values():
+                        try:
+                            fh.close()
+                        except Exception:
+                            pass
+                    self._iq_write_queue.task_done()
+                    break
+
+                cmd = item[0]
+                vfo_idx = item[1]
+
+                if cmd in ("start", "roll"):
+                    _, vfo_idx, filepath, meta = item
+                    old_fh = file_handles.pop(vfo_idx, None)
+                    if old_fh is not None:
+                        old_fh.close()
+                    fh = open(filepath, "wb")
+                    file_handles[vfo_idx] = fh
+                    meta_path = filepath[:-3] + ".json"
+                    with open(meta_path, "w") as jf:
+                        json.dump(meta, jf, indent=2)
+                elif cmd == "stop":
+                    fh = file_handles.pop(vfo_idx, None)
+                    if fh is not None:
+                        fh.close()
+                elif cmd == "data":
+                    _, vfo_idx, data = item
+                    fh = file_handles.get(vfo_idx)
+                    if fh is not None:
+                        fh.write(data.tobytes())
+            except Exception:
+                self.logger.error("IQ writer thread error: %s", traceback.format_exc())
+            finally:
+                self._iq_write_queue.task_done()
+
     def resetPeakHold(self):
         if self.spectrum_fig_type == "Single":
             self.peak_hold_spectrum = np.ones(self.spectrum_window_size) * -200
@@ -349,6 +440,9 @@ class SignalProcessor(threading.Thread):
         Main processing thread
         """
         # scipy.fft.set_workers(4)
+        iq_writer = threading.Thread(target=self._iq_writer_loop, daemon=True, name="CoherentIQWriter")
+        iq_writer.start()
+
         while True:
             self.is_running = False
             time.sleep(1)
@@ -629,6 +723,34 @@ class SignalProcessor(threading.Thread):
                                     self.max_power_level_list.append(np.maximum(-100, max_amplitude))
                                     self.freq_list.append(write_freq)
                                     self.doa_result_log_list.append(doa_result_log)
+
+                                    # -----> COHERENT IQ RECORDING (all channels, squelch-gated) <-----
+                                    if self.vfo_record_iq[i]:
+                                        chunk = vfo_channel.astype(np.complex64)
+                                        actual_sr = sampling_freq // decimation_factor
+                                        need_new_chunk = (
+                                            self._record_chunk_bytes[i] == 0
+                                            or self._record_chunk_bytes[i] >= self._record_chunk_size_bytes
+                                        )
+                                        if need_new_chunk:
+                                            cmd = "roll" if self._record_chunk_bytes[i] > 0 else "start"
+                                            try:
+                                                self._iq_write_queue.put_nowait(
+                                                    (cmd, i, self._make_chunk_path(i), self._make_chunk_meta(i, actual_sr))
+                                                )
+                                                self._record_chunk_bytes[i] = 0
+                                            except queue.Full:
+                                                self.logger.warning(
+                                                    "IQ write queue full, cannot open chunk for VFO %d", i
+                                                )
+                                        self._record_chunk_bytes[i] += chunk.nbytes
+                                        try:
+                                            self._iq_write_queue.put_nowait(("data", i, chunk))
+                                        except queue.Full:
+                                            self.logger.warning(
+                                                "IQ write queue full, dropped coherent IQ frame for VFO %d", i
+                                            )
+                                            self._record_chunk_bytes[i] -= chunk.nbytes
 
                                     if self.vfo_demod_modes[i] or self.vfo_iq_enabled[i]:
                                         if theta_0 not in self.vfo_theta_channel[i]:

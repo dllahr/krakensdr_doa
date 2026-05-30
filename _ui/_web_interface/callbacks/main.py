@@ -319,6 +319,15 @@ def update_vfo_params(*args):
             web_interface.module_signal_processor.vfo_demod[i] = kwargs_dict[f"vfo_{i}_demod"]
             web_interface.module_signal_processor.vfo_iq[i] = kwargs_dict[f"vfo_{i}_iq"]
 
+            sp = web_interface.module_signal_processor
+            record_iq_val = kwargs_dict.get(f"vfo_{i}_record_iq") or []
+            if len(record_iq_val):
+                if not sp.vfo_record_iq[i]:
+                    sp.start_vfo_iq_record(i)
+            else:
+                if sp.vfo_record_iq[i]:
+                    sp.stop_vfo_iq_record(i)
+
     for i in range(web_interface.module_signal_processor.max_vfos):
         if i < kwargs_dict["active_vfos"]:
             app_updates["vfo" + str(i)] = {"style": {"display": "block"}}
