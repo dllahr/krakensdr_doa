@@ -104,7 +104,7 @@ def get_vfo_card_layout():
                         dcc.Checklist(
                             id=f"vfo_{i}_record_iq",
                             options=[{"label": " Record (all channels)", "value": "record"}],
-                            value=[],
+                            value=["record"] if web_interface.module_signal_processor.vfo_record_iq[i] else [],
                             className="field-body",
                         ),
                     ],

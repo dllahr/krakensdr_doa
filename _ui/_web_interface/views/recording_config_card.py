@@ -73,6 +73,19 @@ def get_recording_config_card_layout():
             ),
             html.Div(
                 [
+                    html.Div("Waterfall Log File:", id="label_waterfall_log_filename", className="field-label"),
+                    dcc.Input(
+                        id="waterfall_log_filename",
+                        value=web_interface.module_signal_processor.waterfall_log_filename,
+                        type="text",
+                        className="field-body-textbox",
+                        debounce=True,
+                    ),
+                ],
+                className="field",
+            ),
+            html.Div(
+                [
                     html.Div("File Size (MB):", id="label_file_size", className="field-label"),
                     html.Div("- MB", id="body_file_size", className="field-body"),
                 ],

@@ -24,13 +24,15 @@ import logging
 import math
 import os
 import queue
+import shutil
+import subprocess
 
 # Import built-in modules
 import threading
 import time
 import traceback
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from multiprocessing.dummy import Pool
 from pathlib import Path
@@ -241,15 +243,18 @@ class SignalProcessor(threading.Thread):
         self.write_interval = 1
         self.last_write_time = [time.time()] * self.max_vfos
 
-        self.en_waterfall_log = False
+        self.en_waterfall_log = True
+        self.waterfall_log_filename = "logs/kraken_waterfall.csv"
         waterfall_log_dir = os.path.join(self.root_path, "logs")
         os.makedirs(waterfall_log_dir, exist_ok=True)
-        self.waterfall_log_path = os.path.join(waterfall_log_dir, "kraken_waterfall.csv")
+        self.waterfall_log_path = os.path.join(self.root_path, self.waterfall_log_filename)
         self.waterfall_log_fd = None
         self._wf_accum = None
         self._wf_accum_count = 0
         self._wf_accum_start = None
         self._wf_freq_axis = None
+        self._rotation_timer = None
+        self._schedule_waterfall_rotation()
 
         self.adc_overdrive = False
         self.number_of_correlated_sources = []
@@ -297,6 +302,8 @@ class SignalProcessor(threading.Thread):
 
     def start_vfo_iq_record(self, vfo_idx):
         """Enable coherent IQ recording for vfo_idx. File opens on the next above-squelch frame."""
+        if self.vfo_record_iq[vfo_idx]:
+            return  # already recording — page re-render should not restart a new chunk
         Path(self.coherent_record_path).mkdir(parents=True, exist_ok=True)
         self._record_chunk_bytes[vfo_idx] = 0  # triggers new chunk on next frame
         self.vfo_record_iq[vfo_idx] = True
@@ -1363,6 +1370,52 @@ class SignalProcessor(threading.Thread):
             os.path.getsize(os.path.join(os.path.join(self.root_path, self.data_recording_file_name))) / 1048576,
             2,
         )  # Convert to MB
+
+    def set_waterfall_log_path(self, relative_path):
+        if self.waterfall_log_fd is not None:
+            self.waterfall_log_fd.flush()
+            self.waterfall_log_fd.close()
+            self.waterfall_log_fd = None
+        self.waterfall_log_filename = relative_path
+        abs_path = os.path.join(self.root_path, relative_path)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        self.waterfall_log_path = abs_path
+        self._reset_waterfall_accum()
+
+    def _schedule_waterfall_rotation(self):
+        if self._rotation_timer is not None:
+            self._rotation_timer.cancel()
+        now = datetime.now()
+        target = now.replace(hour=0, minute=34, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        delay = (target - now).total_seconds()
+        self._rotation_timer = threading.Timer(delay, self._rotate_waterfall_log)
+        self._rotation_timer.daemon = True
+        self._rotation_timer.start()
+
+    def _rotate_waterfall_log(self):
+        # Close current file handle so the next write reopens with a fresh file
+        if self.waterfall_log_fd is not None:
+            self.waterfall_log_fd.flush()
+            self.waterfall_log_fd.close()
+            self.waterfall_log_fd = None
+
+        src = self.waterfall_log_path
+        if os.path.exists(src) and os.path.getsize(src) > 0:
+            now = datetime.now()
+            prefix = now.strftime("%Y%m%d_%H%M_")
+            dst = os.path.join(os.path.dirname(src), prefix + os.path.basename(src) + ".gz")
+            try:
+                compressor = "pigz" if shutil.which("pigz") else "gzip"
+                with open(dst, "wb") as out_f:
+                    subprocess.run([compressor, "--best", "-c", src], stdout=out_f, check=True)
+                os.remove(src)
+            except Exception:
+                self.logger.error("Waterfall log rotation failed", exc_info=True)
+
+        self._reset_waterfall_accum()
+        self._schedule_waterfall_rotation()
 
     def _reset_waterfall_accum(self):
         self._wf_accum = None
