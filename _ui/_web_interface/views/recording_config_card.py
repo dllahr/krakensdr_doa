@@ -66,8 +66,15 @@ def get_recording_config_card_layout():
             ),
             html.Div(
                 [
-                    html.Div("Enable Waterfall Logging:", id="label_en_waterfall_log", className="field-label"),
-                    dcc.Checklist(options=option, id="en_waterfall_log", className="field-body", value=en_waterfall_log),
+                    html.Div("File Size (MB):", id="label_file_size", className="field-label"),
+                    html.Div("- MB", id="body_file_size", className="field-body"),
+                ],
+                className="field",
+            ),
+            html.Div(
+                [
+                    html.Button("Download File", id="btn_download_file", className="btn"),
+                    dcc.Download(id="download_recorded_file"),
                 ],
                 className="field",
             ),
@@ -86,15 +93,8 @@ def get_recording_config_card_layout():
             ),
             html.Div(
                 [
-                    html.Div("File Size (MB):", id="label_file_size", className="field-label"),
-                    html.Div("- MB", id="body_file_size", className="field-body"),
-                ],
-                className="field",
-            ),
-            html.Div(
-                [
-                    html.Button("Download File", id="btn_download_file", className="btn"),
-                    dcc.Download(id="download_recorded_file"),
+                    html.Div("Enable Waterfall Logging:", id="label_en_waterfall_log", className="field-label"),
+                    dcc.Checklist(options=option, id="en_waterfall_log", className="field-body", value=en_waterfall_log),
                 ],
                 className="field",
             ),
